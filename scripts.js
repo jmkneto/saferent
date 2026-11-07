@@ -1,13 +1,19 @@
 // rentCheck: compares a rental ad with the official RTB average rent and common scam warning signs.
 // Rents and fraud figures come live from the CSO (Central Statistics Office) open data API.
+// The 3D map uses OpenStreetMap: Photon to find the address, OpenFreeMap for the map, MapLibre to draw it.
+// All visible text is in translations.js.
 
 const CSO_REST = "https://ws.cso.ie/public/api.restful/PxStat.Data.Cube_API.ReadDataset";
 const CSO_RPC = "https://ws.cso.ie/public/api.jsonrpc";
+const GEOCODER = "https://photon.komoot.io/api/";
+const IRELAND_BOX = "-10.7,51.3,-5.9,55.5"; // west, south, east, north
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const RTB_REGISTER_URL = "https://rtb.ie/check-the-register/";
 const PSRA_REGISTER_URL = "https://www.psr.ie";
 const CONTACT_EMAIL = "hello@rentcheck.ie";
 const RENTS_CACHE_KEY = "rentcheck-rents-v1";
 const AREA_KEY = "rentcheck-fraud-area";
+const LANG_KEY = "rentcheck-lang";
 const ONE_DAY = 24 * 60 * 60 * 1000;
 
 // Eircode = routing key (letter + 2 digits, or D6W) + 4 characters. B G I J L M O Q S U Z are never used.
@@ -22,31 +28,91 @@ const COUNTIES = [
   "Longford", "Louth", "Mayo", "Meath", "Monaghan", "Offaly", "Roscommon", "Sligo", "Tipperary", "Waterford", "Westmeath", "Wexford", "Wicklow",
 ];
 
-// Points per warning sign. The keys match the checkbox names in index.html.
+// Points per warning sign. The names match the checkboxes in index.html, "key" is the text in translations.js.
 const SIGNS = {
-  deposit_before_viewing: { points: 30, label: "Asked to pay before a viewing" },
-  no_viewing: { points: 30, label: "Can't view the property in person" },
-  unusual_payment: { points: 20, label: "Unusual payment method (money transfer, crypto, account abroad)" },
-  pressure: { points: 10, label: "Pressure to decide or pay fast" },
-  id_before_viewing: { points: 10, label: "Asks for ID or bank details before a viewing" },
-  off_platform: { points: 10, label: "Messages only, avoids calls and meeting" },
-  anonymous_profile: { points: 10, label: "Posted by a hidden or new profile" },
+  deposit_before_viewing: { points: 30, key: "s_deposit" },
+  no_viewing: { points: 30, key: "s_noview" },
+  unusual_payment: { points: 20, key: "s_payment" },
+  pressure: { points: 10, key: "s_pressure" },
+  id_before_viewing: { points: 10, key: "s_id" },
+  off_platform: { points: 10, key: "s_messages" },
+  anonymous_profile: { points: 10, key: "s_profile" },
 };
 
 // How far below the average rent the asking price is, in %.
 const PRICE_BANDS = [
-  { below: 40, points: 40, label: "Price 40% or more below the average rent" },
-  { below: 25, points: 25, label: "Price 25–39% below the average rent" },
-  { below: 10, points: 10, label: "Price 10–24% below the average rent" },
+  { below: 40, points: 40, key: "band40" },
+  { below: 25, points: 25, key: "band25" },
+  { below: 10, points: 10, key: "band10" },
 ];
+
+const SIZE_KEYS = { room: "sizeRoom", "One bed": "size1", "Two bed": "size2", "Three bed": "size3", "Four plus bed": "size4" };
 
 const $ = (id) => document.getElementById(id);
 const form = $("check-form");
 const resultEl = $("result");
 
+let lang = "en";
 let rents = null; // { quarter, rows: [{ location, bedrooms, rent, quarter }] }
+let rentsLoaded = false;
 let rentsReady = null;
 let fraud = null; // { quarters: ["2026Q2", ...], areas: { Ireland: [n, ...], "Cork City": [...] }, updated }
+let fraudState = "loading"; // loading, ok or error
+let lastCheck = null; // kept so the result can be redrawn in another language
+
+// Language
+
+// Text for a key in the current language, with {name} filled in. Falls back to English.
+function t(key, vars = {}) {
+  const text = TRANSLATIONS[lang][key] ?? TRANSLATIONS.en[key] ?? key;
+  return text.replace(/\{(\w+)\}/g, (match, name) => (name in vars ? vars[name] : match));
+}
+
+const locale = () => LANGUAGES.find((l) => l.code === lang).locale;
+const formatNumber = (n) => new Intl.NumberFormat(locale()).format(n);
+
+function quarterName(q) {
+  const year = Number(q.slice(0, 4));
+  const first = (Number(q.slice(-1)) - 1) * 3;
+  const month = new Intl.DateTimeFormat(locale(), { month: "short" });
+  return `${month.format(new Date(year, first, 1))}–${month.format(new Date(year, first + 2, 1))} ${year}`;
+}
+
+// Saved choice first, then the browser's own language, then English.
+function pickLanguage() {
+  const saved = readStore(LANG_KEY);
+  if (TRANSLATIONS[saved]) return saved;
+  for (const l of navigator.languages || [navigator.language || ""]) {
+    const code = l.slice(0, 2).toLowerCase();
+    if (TRANSLATIONS[code]) return code;
+  }
+  return "en";
+}
+
+function applyLanguage(code) {
+  lang = TRANSLATIONS[code] ? code : "en";
+  document.documentElement.lang = lang;
+  document.title = `rentCheck · ${t("title")}`;
+  document.querySelectorAll("[data-i18n]").forEach((el) => (el.textContent = t(el.dataset.i18n)));
+  document.querySelectorAll("[data-i18n-html]").forEach((el) => (el.innerHTML = t(el.dataset.i18nHtml)));
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => (el.placeholder = t(el.dataset.i18nPh)));
+  $("lang-select").value = lang;
+
+  updateProgress();
+  updateSigns();
+  paintFraud();
+  paintDataNote();
+  if (lastCheck && !resultEl.hidden) {
+    render(lastCheck, false);
+    showMap(lastCheck.eircode, lastCheck.address, lastCheck.area);
+  }
+}
+
+LANGUAGES.forEach((l) => $("lang-select").add(new Option(l.name, l.code)));
+$("lang-select").addEventListener("change", (e) => {
+  writeStore(LANG_KEY, e.target.value);
+  applyLanguage(e.target.value);
+});
 
 // Scoring
 
@@ -107,7 +173,7 @@ function updateProgress() {
   });
   $("progress-bar").style.width = `${(done.length / required.length) * 100}%`;
   $("progress-bar").parentElement.classList.toggle("done", all);
-  $("progress-label").textContent = all ? "Ready" : `${done.length} of ${required.length}`;
+  $("progress-label").textContent = all ? t("ready") : t("progress", { done: done.length, total: required.length });
   $("progress-label").classList.toggle("done", all);
   $("submit").classList.toggle("ready", all);
 }
@@ -138,9 +204,7 @@ function updateSigns() {
   const picked = signs.map((s) => s.querySelector("input")).filter((i) => i.checked);
   const points = picked.reduce((sum, i) => sum + (SIGNS[i.name] ? SIGNS[i.name].points : 0), 0);
   const note = $("tag-note");
-  note.textContent = picked.length
-    ? `${picked.length} warning sign${picked.length > 1 ? "s" : ""} ticked · +${points} points so far`
-    : "No warning signs ticked";
+  note.textContent = picked.length ? t("signsTicked", { n: picked.length, points }) : t("noSigns");
   note.classList.toggle("warn", picked.length > 0);
 }
 
@@ -238,6 +302,11 @@ function parseRents(ds) {
   return { quarter, rows };
 }
 
+function paintDataNote() {
+  if (!rentsLoaded) return;
+  $("data-note").textContent = rents ? t("dataNote", { quarter: quarterName(rents.quarter) }) : t("dataNoteFail");
+}
+
 // Whole words only, so "Dublin 1" doesn't match inside "Dublin 15".
 const words = (s) => ` ${String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
 const longest = (list) => [...list].sort((a, b) => b.length - a.length)[0];
@@ -256,18 +325,18 @@ function detectArea(address, eircode) {
     const [town, inCounty] = l.split(",").map((s) => s.trim());
     return inCounty && named(town) && (!county || inCounty.startsWith(county)); // "Citywest, Dublin 24" is in Dublin
   });
-  if (towns.length) return { location: longest(towns), how: "the town in the address" };
+  if (towns.length) return { location: longest(towns), how: "howTown" };
 
   // 2. A city or Dublin district from the Eircode.
   const fromKey = ROUTING_KEY_AREAS[compact(eircode).slice(0, 3)];
-  if (fromKey && labels.includes(fromKey)) return { location: fromKey, how: "the Eircode" };
+  if (fromKey && labels.includes(fromKey)) return { location: fromKey, how: "howEircode" };
 
   // 3. A city, county town or Dublin district named in the address.
   const places = labels.filter((l) => !l.includes(",") && !COUNTIES.includes(l) && named(l));
-  if (places.length) return { location: longest(places), how: "the address" };
+  if (places.length) return { location: longest(places), how: "howAddress" };
 
   // 4. The county average as a last resort.
-  if (county && labels.includes(county)) return { location: county, how: "the county average" };
+  if (county && labels.includes(county)) return { location: county, how: "howCounty" };
   return null;
 }
 
@@ -277,7 +346,7 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!validateAll(required)) {
     updateProgress();
-    toast("A few required fields still need a look.");
+    toast(t("fixFields"));
     return;
   }
 
@@ -290,88 +359,189 @@ form.addEventListener("submit", async (e) => {
   const price = Number(form.rent.value);
   const monthly = form.period.value === "week" ? (price * 52) / 12 : price;
   const bedrooms = form.bedrooms.value;
+  const agency = form.q_agency.checked;
   const ticked = Object.keys(SIGNS).filter((name) => form[name].checked);
   const notes = [];
 
-  if (!rents) {
-    $("status").textContent = "Loading the official rent averages…";
+  if (!rentsLoaded) {
+    $("status").textContent = t("loadingRents");
     await rentsReady;
   }
 
   let area = null;
   let avg = null;
-  if (bedrooms === "room") notes.push("Official averages only cover whole properties, so the price wasn't compared for a room.");
-  else if (!rents) notes.push("We couldn't reach the official rent averages, so the price wasn't compared. Try again in a minute.");
+  if (bedrooms === "room") notes.push("noteRoom");
+  else if (!rents) notes.push("noteNoRents");
   else {
     area = detectArea(address, eircode);
     avg = area ? rents.rows.find((r) => r.location === area.location && r.bedrooms === bedrooms) : null;
-    if (!avg) notes.push("We couldn't match this address to an area in the official rent data, so the price wasn't compared.");
+    if (!avg) notes.push("noteNoMatch");
   }
-  if (form.q_agency.checked) notes.push("They say they're an agency: search the name on the PSRA register. Licensed letting agents must be listed.");
+  if (agency) notes.push("noteAgency");
 
   const diff = avg ? ((monthly - avg.rent) / avg.rent) * 100 : null;
   const { score, level, reasons } = scoreListing(diff, ticked);
 
-  render({ level, score, reasons, area, avg, diff, monthly, bedrooms, notes, eircode });
+  lastCheck = { level, score, reasons, area, avg, diff, monthly, bedrooms, notes, eircode, address, agency };
+  render(lastCheck, true);
   $("status").textContent = "";
   btn.disabled = false;
+  showMap(eircode, address, area);
 });
 
-function render({ level, score, reasons, area, avg, diff, monthly, bedrooms, notes, eircode }) {
-  const summary = {
-    High: "This ad shows strong signs of a rental scam.",
-    Medium: "This ad has some warning signs. Be careful before you pay anything.",
-    Low: "We didn't find the main warning signs. That doesn't prove it's safe, so stay careful.",
-  }[level];
-
-  const steps = ["Don't pay anything before you've viewed the property in person.", `Search ${eircode} on the RTB register to see if a tenancy is registered there.`];
-  if (level !== "Low") steps.push("Ask to view it with the landlord or agent, and walk away if they refuse.");
+// fresh = a new check (scroll to it, animate the score); otherwise just redraw in another language.
+function render(c, fresh) {
+  const steps = [t("step_pay"), t("step_rtb", { eircode: c.eircode })];
+  if (c.level !== "Low") steps.push(t("step_view"));
 
   const found = [];
-  if (avg) {
-    const size = bedrooms.toLowerCase();
-    const side = diff < 0 ? "below" : "above";
+  if (c.avg) {
+    const pct = Math.abs(Math.round(c.diff));
     found.push(
-      `Price €${Math.round(monthly)}/month vs the official average of €${Math.round(avg.rent)} for a ${escapeHtml(size)} in ${escapeHtml(area.location)}: ` +
-        `${Math.abs(Math.round(diff))}% ${side} (${avg.quarter.replace("Q", " Q")}, area from ${area.how})`
+      escapeHtml(
+        t("priceLine", {
+          price: formatNumber(Math.round(c.monthly)),
+          avg: formatNumber(Math.round(c.avg.rent)),
+          size: t(SIZE_KEYS[c.bedrooms]),
+          area: c.area.location,
+          quarter: quarterName(c.avg.quarter),
+          diff: t(c.diff < 0 ? "diffBelow" : "diffAbove", { pct }),
+          how: t(c.area.how),
+        })
+      )
     );
   }
-  reasons.forEach((r) => found.push(`${escapeHtml(r.label)} <span class="pts-inline">+${r.points}</span>`));
+  c.reasons.forEach((r) => found.push(`${escapeHtml(t(r.key))} <span class="pts-inline">+${r.points}</span>`));
 
   resultEl.innerHTML = `
     <div class="result-top">
-      <div class="badge badge-${level.toLowerCase()}">${level} risk</div>
-      <div class="score"><b id="score-num">0</b><span>/100</span></div>
+      <div class="badge badge-${c.level.toLowerCase()}">${escapeHtml(t(`risk${c.level}`))}</div>
+      <div class="score"><b id="score-num">${fresh ? 0 : c.score}</b><span>/100</span></div>
     </div>
-    <div class="meter meter-${level.toLowerCase()}"><span id="score-bar"></span></div>
-    <p class="explanation">${summary}</p>
-    <h4>What we found</h4>
-    ${found.length ? `<ul>${found.map((f) => `<li>${f}</li>`).join("")}</ul>` : "<p>None of the warning signs we check for.</p>"}
-    ${notes.map((n) => `<p class="warning">${escapeHtml(n)}</p>`).join("")}
-    <h4>What to do next</h4>
+    <div class="meter meter-${c.level.toLowerCase()}"><span id="score-bar"></span></div>
+    <p class="explanation">${escapeHtml(t(`sum${c.level}`))}</p>
+    <h4>${escapeHtml(t("found"))}</h4>
+    ${found.length ? `<ul>${found.map((f) => `<li>${f}</li>`).join("")}</ul>` : `<p>${escapeHtml(t("noneFound"))}</p>`}
+    ${c.notes.map((n) => `<p class="warning">${escapeHtml(t(n))}</p>`).join("")}
+    <h4>${escapeHtml(t("where"))}</h4>
+    <div class="map" id="map"></div>
+    <p class="map-note" id="map-note">${escapeHtml(t("mapFinding"))}</p>
+    <h4>${escapeHtml(t("next"))}</h4>
     <ul>${steps.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>
     <div class="actions">
-      <a class="btn" href="${RTB_REGISTER_URL}" target="_blank" rel="noopener">Check ${escapeHtml(eircode)} on the RTB register</a>
-      <button type="button" class="btn secondary" id="copy-eircode">Copy Eircode</button>
-      ${form.q_agency.checked ? `<a class="btn secondary" href="${PSRA_REGISTER_URL}" target="_blank" rel="noopener">Open the PSRA register</a>` : ""}
+      <a class="btn" href="${RTB_REGISTER_URL}" target="_blank" rel="noopener">${escapeHtml(t("checkRtb", { eircode: c.eircode }))}</a>
+      <button type="button" class="btn secondary" id="copy-eircode">${escapeHtml(t("copyEircode"))}</button>
+      ${c.agency ? `<a class="btn secondary" href="${PSRA_REGISTER_URL}" target="_blank" rel="noopener">${escapeHtml(t("openPsra"))}</a>` : ""}
     </div>
-    <p class="small">This is a guide, not legal advice. A low score doesn't prove a listing is safe.</p>`;
+    <p class="small">${escapeHtml(t("disclaimer"))}</p>`;
   resultEl.hidden = false;
-  resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
-  countUp($("score-num"), score, 1100);
 
-  // Read the width once so the bar animates from 0 instead of jumping.
   const bar = $("score-bar");
-  void bar.offsetWidth;
-  bar.style.width = `${score}%`;
+  if (fresh) {
+    resultEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    countUp($("score-num"), c.score, 1100);
+    void bar.offsetWidth; // read the width once so the bar animates from 0 instead of jumping
+  } else {
+    bar.style.transition = "none";
+  }
+  bar.style.width = `${c.score}%`;
 
   const copyBtn = $("copy-eircode");
   copyBtn.addEventListener("click", () => {
-    navigator.clipboard.writeText(eircode).then(
-      () => (copyBtn.textContent = "Copied"),
-      () => toast(`Copy failed. The Eircode is ${eircode}`)
+    navigator.clipboard.writeText(c.eircode).then(
+      () => (copyBtn.textContent = t("copied")),
+      () => toast(t("copyFailed", { eircode: c.eircode }))
     );
   });
+}
+
+// 3D map of the area around the property
+
+let map = null;
+let spin = 0;
+const placeCache = new Map();
+
+async function searchPlace(q) {
+  const res = await fetch(`${GEOCODER}?q=${encodeURIComponent(q)}&limit=1&bbox=${IRELAND_BOX}`);
+  const hit = (await res.json()).features[0];
+  return hit && hit.properties.countrycode === "IE" ? hit : null;
+}
+
+// OpenStreetMap only knows some Eircodes, so try the Eircode, then the address, then the area we compared with.
+async function locate(eircode, address, area) {
+  const byCode = await searchPlace(eircode);
+  if (byCode && byCode.properties.osm_value === "postcode" && compact(byCode.properties.name || "") === compact(eircode)) {
+    return { coords: byCode.geometry.coordinates, zoom: 17, note: "mapFound", vars: { eircode } };
+  }
+  const byAddress = await searchPlace(`${address}, Ireland`);
+  if (byAddress) {
+    const exact = ["house", "street"].includes(byAddress.properties.type);
+    return { coords: byAddress.geometry.coordinates, zoom: exact ? 16.5 : 15, note: "mapAddress", vars: { eircode } };
+  }
+  if (area) {
+    const byArea = await searchPlace(`${area.location}, Ireland`);
+    if (byArea) return { coords: byArea.geometry.coordinates, zoom: 14.5, note: "mapArea", vars: { area: area.location } };
+  }
+  return null;
+}
+
+async function showMap(eircode, address, area) {
+  const box = $("map");
+  const note = $("map-note");
+  cancelAnimationFrame(spin);
+  if (map) {
+    map.remove();
+    map = null;
+  }
+  const fail = (key) => {
+    box.remove();
+    note.textContent = t(key);
+  };
+  if (!window.maplibregl) return fail("mapNoLib");
+
+  const cacheKey = `${eircode}|${address}`;
+  let place = placeCache.get(cacheKey);
+  if (place === undefined) {
+    try {
+      place = await locate(eircode, address, area);
+      placeCache.set(cacheKey, place);
+    } catch {
+      return fail("mapNoAnswer");
+    }
+  }
+  if (!box.isConnected) return; // a newer check or language change has replaced this result
+  if (!place) return fail("mapNotFound");
+
+  try {
+    map = new maplibregl.Map({
+      container: box,
+      style: MAP_STYLE,
+      center: place.coords,
+      zoom: place.zoom,
+      pitch: 60,
+      bearing: -20,
+      attributionControl: { compact: true },
+    });
+  } catch {
+    return fail("mapNoGL");
+  }
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+  new maplibregl.Marker({ color: "#2d4f86" }).setLngLat(place.coords).addTo(map);
+  note.textContent = t(place.note, place.vars);
+
+  // Slowly circle the spot until the user grabs the map.
+  const stop = () => cancelAnimationFrame(spin);
+  ["mousedown", "touchstart", "wheel"].forEach((ev) => map.getCanvasContainer().addEventListener(ev, stop, { once: true }));
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const turning = map;
+    map.once("load", () => {
+      const turn = () => {
+        turning.setBearing(turning.getBearing() + 0.08);
+        spin = requestAnimationFrame(turn);
+      };
+      spin = requestAnimationFrame(turn);
+    });
+  }
 }
 
 // Live fraud figures: reports to Gardaí per Garda division (CSO table CJQ11)
@@ -389,9 +559,6 @@ function parseFraud(ds) {
   return { quarters, areas, updated: ds.updated };
 }
 
-const QUARTER_MONTHS = { 1: "Jan–Mar", 2: "Apr–Jun", 3: "Jul–Sep", 4: "Oct–Dec" };
-const quarterName = (q) => `${QUARTER_MONTHS[q.slice(-1)]} ${q.slice(0, 4)}`;
-
 async function loadFraud() {
   const select = $("fraud-area");
   try {
@@ -399,14 +566,13 @@ async function loadFraud() {
     if (!res.ok) throw new Error(res.status);
     fraud = parseFraud(await res.json());
   } catch {
-    $("live-badge").classList.add("off");
-    $("live-badge").lastChild.textContent = "Offline";
-    $("fraud-trend").textContent = "Couldn't reach the CSO just now. Try again later.";
+    fraudState = "error";
+    paintFraud();
     return;
   }
 
   select.innerHTML = "";
-  select.add(new Option("All of Ireland", "Ireland"));
+  select.add(new Option("", "Ireland"));
   Object.keys(fraud.areas)
     .filter((n) => n !== "Ireland")
     .sort()
@@ -414,28 +580,41 @@ async function loadFraud() {
   const saved = readStore(AREA_KEY);
   select.value = saved && fraud.areas[saved] ? saved : "Ireland";
   select.disabled = false;
-  showFraud(select.value);
+  fraudState = "ok";
+  paintFraud(true);
 }
 
-function showFraud(name) {
+function paintFraud(animate = false) {
+  const select = $("fraud-area");
+  $("live-badge").classList.toggle("off", fraudState === "error");
+  $("live-text").textContent = t(fraudState === "error" ? "offline" : "live");
+  select.options[0].text = t(fraudState === "ok" ? "allIreland" : "ireland");
+  if (fraudState === "ok") return showFraud(select.value, animate);
+  $("fraud-cap").textContent = t("fraudCapShort");
+  $("fraud-trend").textContent = t(fraudState === "error" ? "fraudError" : "loadingFigures");
+}
+
+function showFraud(name, animate) {
   const series = fraud.areas[name];
   let last = series.length - 1;
   while (last >= 0 && series[last] == null) last--;
   if (last < 0) return;
 
-  countUp($("fraud-num"), series[last], 1200);
-  const where = name === "Ireland" ? "in Ireland" : name.startsWith("D.M.R.") ? `in Dublin (${name.replace("D.M.R. ", "")})` : `in ${name}`;
-  $("fraud-cap").textContent = `fraud reports to Gardaí ${where}, ${quarterName(fraud.quarters[last])}`;
+  if (animate) countUp($("fraud-num"), series[last], 1200);
+  else $("fraud-num").textContent = formatNumber(series[last]);
+  const place = name === "Ireland" ? t("ireland") : name.startsWith("D.M.R.") ? `Dublin (${name.replace("D.M.R. ", "")})` : name;
+  $("fraud-cap").textContent = t("fraudCap", { place, quarter: quarterName(fraud.quarters[last]) });
 
   const parts = [];
   const yearAgo = series[last - 4];
   if (yearAgo) {
     const pct = Math.round(((series[last] - yearAgo) / yearAgo) * 100);
-    parts.push(pct === 0 ? "Same as a year earlier" : `<b class="${pct > 0 ? "up" : "down"}">${pct > 0 ? "+" : ""}${pct}%</b> on the same quarter last year`);
+    const shown = `<b class="${pct > 0 ? "up" : "down"}">${pct > 0 ? "+" : ""}${pct}%</b>`;
+    parts.push(pct === 0 ? escapeHtml(t("sameYear")) : escapeHtml(t("trend", { pct: "{pct}" })).replace("{pct}", shown));
   }
   if (fraud.updated) {
-    const date = new Date(fraud.updated).toLocaleDateString("en-IE", { day: "numeric", month: "short", year: "numeric" });
-    parts.push(`CSO updated ${escapeHtml(date)}`);
+    const date = new Date(fraud.updated).toLocaleDateString(locale(), { day: "numeric", month: "short", year: "numeric" });
+    parts.push(escapeHtml(t("csoUpdated", { date })));
   }
   $("fraud-trend").innerHTML = parts.join(" · ");
   drawSpark($("fraud-spark"), series.slice(Math.max(0, last - 7), last + 1));
@@ -466,13 +645,13 @@ function drawSpark(el, values) {
 
 $("fraud-area").addEventListener("change", (e) => {
   writeStore(AREA_KEY, e.target.value);
-  showFraud(e.target.value);
+  showFraud(e.target.value, true);
 });
 
 let resizeTimer;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => fraud && showFraud($("fraud-area").value), 200);
+  resizeTimer = setTimeout(() => fraudState === "ok" && showFraud($("fraud-area").value, false), 200);
 });
 
 // Ask a friend, contact
@@ -484,18 +663,18 @@ $("share-form").addEventListener("submit", async (e) => {
   if (!text) {
     replay(box, "shake");
     box.focus();
-    return toast("Write or paste something first.");
+    return toast(t("shareEmpty"));
   }
-  const body = `Can you have a look at this rental ad before I pay anything?\n\n${text}`;
+  const body = `${t("shareBody")}\n\n${text}`;
   if (navigator.share) {
     try {
-      await navigator.share({ title: "Rental ad", text: body });
+      await navigator.share({ title: t("shareSubject"), text: body });
     } catch {
       // share sheet closed
     }
     return;
   }
-  location.href = `mailto:?subject=${encodeURIComponent("Second opinion on a rental ad")}&body=${encodeURIComponent(body)}`;
+  location.href = `mailto:?subject=${encodeURIComponent(t("shareSubject"))}&body=${encodeURIComponent(body)}`;
 });
 
 $("contact-form").addEventListener("submit", (e) => {
@@ -503,19 +682,18 @@ $("contact-form").addEventListener("submit", (e) => {
   if (!validateAll([...e.target.querySelectorAll("[data-rule]")])) return;
   const from = $("contact-email").value.trim();
   const msg = $("contact-msg").value.trim();
-  location.href = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent("rentCheck")}&body=${encodeURIComponent(`${msg}\n\nReply to: ${from}`)}`;
-  toast("Opening your email app…");
+  location.href = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent("rentCheck")}&body=${encodeURIComponent(`${msg}\n\n${from}`)}`;
+  toast(t("openingEmail"));
 });
 
 // Small helpers
 
 function countUp(el, to, ms) {
   const start = performance.now();
-  const fmt = new Intl.NumberFormat("en-IE");
   const step = (now) => {
-    const t = Math.min(1, (now - start) / ms);
-    el.textContent = fmt.format(Math.round(to * (1 - Math.pow(1 - t, 3))));
-    if (t < 1) requestAnimationFrame(step);
+    const p = Math.min(1, (now - start) / ms);
+    el.textContent = formatNumber(Math.round(to * (1 - Math.pow(1 - p, 3))));
+    if (p < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
 }
@@ -529,11 +707,11 @@ function replay(el, cls) {
 
 let toastTimer;
 function toast(text) {
-  const t = $("toast");
-  t.textContent = text;
-  t.classList.add("show");
+  const box = $("toast");
+  box.textContent = text;
+  box.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+  toastTimer = setTimeout(() => box.classList.remove("show"), 2600);
 }
 
 function readStore(key) {
@@ -608,13 +786,11 @@ if ("IntersectionObserver" in window) {
 
 // Start
 
+applyLanguage(pickLanguage());
 onScroll();
-updateProgress();
-updateSigns();
 loadFraud();
 rentsReady = loadRents().then((data) => {
   rents = data;
-  $("data-note").textContent = rents
-    ? `Rent averages: CSO RIQ02, RTB Average Monthly Rent Report, latest quarter ${rents.quarter.replace("Q", " Q")}.`
-    : "Couldn't load the official rent averages right now, so the price isn't compared.";
+  rentsLoaded = true;
+  paintDataNote();
 });
