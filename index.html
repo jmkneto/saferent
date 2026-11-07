@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rentCheck · Check a rental ad</title>
+  <meta name="description" content="Check if a rental listing in Ireland is a scam, in about a minute.">
+  <meta name="theme-color" content="#f5f1eb">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-head">
+    <div class="wrap head-row">
+      <a class="brand" href="#top" aria-label="rentCheck home">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M16 3.5 4.5 12.2V27a1.5 1.5 0 0 0 1.5 1.5h20a1.5 1.5 0 0 0 1.5-1.5V12.2L16 3.5Z" fill="currentColor"/>
+          <path d="m11 17.4 3.4 3.4 6.6-6.6" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>rentCheck</span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="#top" class="is-active">Home</a>
+        <a href="#check">Check an ad</a>
+        <a href="#how">How it works</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero wrap" id="top">
+    <div class="hero-copy">
+      <p class="eyebrow">Rental scam check · Ireland</p>
+      <h1>Seen a place that looks <em>too good</em>? Check it before you pay.</h1>
+      <p class="lede">Enter the address, Eircode and price, tick what happened, and we compare it with the official RTB average rent for that area. It takes about a minute.</p>
+      <div class="hero-actions">
+        <a class="btn" href="#check">Check an ad</a>
+        <a class="text-link" href="#how">How the score works <span aria-hidden="true">→</span></a>
+      </div>
+      <ul class="facts">
+        <li>Free to use</li>
+        <li>Nothing you type is saved</li>
+        <li>Official RTB rent data</li>
+      </ul>
+    </div>
+
+    <aside class="pulse" aria-label="Fraud figures">
+      <div class="pulse-top">
+        <span class="live" id="live-badge"><i></i>Live</span>
+        <label class="sr-only" for="fraud-area">Area</label>
+        <select id="fraud-area" class="pulse-select" disabled>
+          <option>Ireland</option>
+        </select>
+      </div>
+      <p class="pulse-num"><strong id="fraud-num">–</strong></p>
+      <p class="pulse-cap" id="fraud-cap">fraud reports to Gardaí</p>
+      <div class="spark" id="fraud-spark" aria-hidden="true"></div>
+      <p class="pulse-trend" id="fraud-trend">Loading the latest figures…</p>
+      <div class="pulse-split">
+        <div><strong>230+</strong><span>rental scam reports in Ireland</span></div>
+        <div><strong>€400k+</strong><span>lost by renters</span></div>
+      </div>
+      <p class="pulse-foot">
+        Rental scam figures:
+        <a href="https://www.garda.ie/en/about-us/our-departments/office-of-corporate-communications/press-releases/2026/august/25-08-2026-an-garda-siochana-issues-student-fraud-warning-ahead-of-cao-offers-25th-august-2026.html" target="_blank" rel="noopener">Garda, to 31 July 2026</a>.
+        Fraud reports come live from the <a href="https://data.cso.ie/table/CJQ11" target="_blank" rel="noopener">CSO</a> and change when it publishes a new quarter.
+      </p>
+    </aside>
+  </section>
+
+  <main>
+    <section class="checker wrap" id="check">
+      <div class="section-head">
+        <h2>Check an ad</h2>
+        <p>Fields marked <b class="req">*</b> turn green once they look right.</p>
+      </div>
+
+      <div class="check-grid">
+        <form class="card form-card reveal" id="check-form" novalidate>
+          <div class="step">
+            <h3 class="step-title"><span class="step-no">1</span>The ad</h3>
+
+            <div class="field" data-rule="address" data-form="check">
+              <label for="address">Address <b class="req">*</b></label>
+              <input id="address" name="address" type="text" autocomplete="off" placeholder="e.g. 12 Main Street, Ballincollig, Co. Cork" required>
+              <p class="field-msg">Add the street and town so we can find the area.</p>
+            </div>
+
+            <div class="row">
+              <div class="field" data-rule="eircode" data-form="check">
+                <label for="eircode">Eircode <b class="req">*</b></label>
+                <input id="eircode" name="eircode" type="text" autocomplete="off" maxlength="8" placeholder="T12 K8AF" required>
+                <p class="field-msg">That doesn't look like an Eircode (e.g. T12 K8AF).</p>
+              </div>
+              <div class="field">
+                <label for="bedrooms">Size</label>
+                <select id="bedrooms" name="bedrooms">
+                  <option value="room">Room in a shared house</option>
+                  <option value="One bed">One bed</option>
+                  <option value="Two bed" selected>Two bed</option>
+                  <option value="Three bed">Three bed</option>
+                  <option value="Four plus bed">Four or more</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="field" data-rule="price" data-form="check">
+                <label for="rent">Asking price <b class="req">*</b></label>
+                <div class="price">
+                  <span class="prefix" aria-hidden="true">€</span>
+                  <input id="rent" name="rent" type="text" inputmode="numeric" autocomplete="off" placeholder="1500" required>
+                  <div class="segmented" role="radiogroup" aria-label="Price period">
+                    <label><input type="radio" name="period" value="month" checked><span>month</span></label>
+                    <label><input type="radio" name="period" value="week"><span>week</span></label>
+                  </div>
+                </div>
+                <p class="field-msg">Numbers only, between €50 and €10,000.</p>
+              </div>
+              <div class="field">
+                <label for="author">Posted by <span class="opt">optional</span></label>
+                <input id="author" name="author" type="text" autocomplete="off" placeholder="Name, profile or agency">
+              </div>
+            </div>
+          </div>
+
+          <div class="step">
+            <h3 class="step-title"><span class="step-no">2</span>What happened? <span class="opt">tick all that apply</span></h3>
+            <div class="signs">
+              <label class="sign"><input type="checkbox" name="deposit_before_viewing"><span class="tick"></span><span class="sign-text"><b>Asked to pay before a viewing</b><small>Deposit or rent before you've seen it</small></span><span class="pts">+30</span></label>
+              <label class="sign"><input type="checkbox" name="no_viewing"><span class="tick"></span><span class="sign-text"><b>Can't view it in person</b><small>Abroad, busy, "keys by post"</small></span><span class="pts">+30</span></label>
+              <label class="sign"><input type="checkbox" name="unusual_payment"><span class="tick"></span><span class="sign-text"><b>Unusual payment</b><small>Money transfer, crypto, account abroad</small></span><span class="pts">+20</span></label>
+              <label class="sign"><input type="checkbox" name="pressure"><span class="tick"></span><span class="sign-text"><b>Rushing you</b><small>"Others are interested, pay today"</small></span><span class="pts">+10</span></label>
+              <label class="sign"><input type="checkbox" name="id_before_viewing"><span class="tick"></span><span class="sign-text"><b>Wants your ID first</b><small>Passport or bank details before a viewing</small></span><span class="pts">+10</span></label>
+              <label class="sign"><input type="checkbox" name="off_platform"><span class="tick"></span><span class="sign-text"><b>Messages only</b><small>Avoids calls and meeting up</small></span><span class="pts">+10</span></label>
+              <label class="sign"><input type="checkbox" name="anonymous_profile"><span class="tick"></span><span class="sign-text"><b>Hidden or new profile</b><small>No name, no history</small></span><span class="pts">+10</span></label>
+              <label class="sign"><input type="checkbox" name="q_agency"><span class="tick"></span><span class="sign-text"><b>Says it's an agency</b><small>We'll remind you to check the PSRA register</small></span><span class="pts">tip</span></label>
+            </div>
+          </div>
+        </form>
+
+        <aside class="side">
+          <div class="card summary reveal">
+            <div class="summary-head">
+              <h3>Your check</h3>
+              <span class="progress-label" id="progress-label">0 of 4</span>
+            </div>
+            <div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+            <ul class="checklist">
+              <li data-for="address">Address</li>
+              <li data-for="eircode">Eircode</li>
+              <li data-for="price">Asking price</li>
+              <li data-for="consent">Confirmation</li>
+            </ul>
+            <p class="sign-count" id="tag-note">No warning signs ticked</p>
+
+            <label class="check field" data-rule="consent" data-form="check">
+              <input type="checkbox" id="consent" name="consent" form="check-form" required>
+              <span class="box" aria-hidden="true"></span>
+              <span>I understand rentCheck is a guide, not legal advice. <b class="req">*</b></span>
+            </label>
+
+            <button type="submit" form="check-form" id="submit" class="btn btn-block"><span class="btn-text">Check this ad</span></button>
+            <p class="status" id="status" role="status"></p>
+          </div>
+
+          <div class="card agency reveal">
+            <h3>Is the agency licensed?</h3>
+            <p class="card-sub">Every letting agent in Ireland must be on the PSRA register. Search the name from the ad before you pay.</p>
+            <a class="btn btn-quiet btn-block" href="https://www.psr.ie" target="_blank" rel="noopener">Open the PSRA register</a>
+          </div>
+        </aside>
+      </div>
+
+      <section class="result card" id="result" hidden aria-live="polite"></section>
+    </section>
+
+    <section class="how wrap" id="how">
+      <div class="section-head">
+        <h2>How it works</h2>
+        <p>Fixed rules decide the score, so every point can be explained.</p>
+      </div>
+      <ol class="how-steps">
+        <li class="reveal">
+          <span class="how-no">01</span>
+          <h3>Enter the ad</h3>
+          <p>From the address and Eircode we find the area, then compare the price with the official RTB average rent for that size.</p>
+        </li>
+        <li class="reveal">
+          <span class="how-no">02</span>
+          <h3>Tick what happened</h3>
+          <p>Each warning sign adds fixed points. A price 40% or more under the average adds 40 on its own.</p>
+        </li>
+        <li class="reveal">
+          <span class="how-no">03</span>
+          <h3>Get a clear answer</h3>
+          <p>A risk level with next steps, and the Eircode ready to search on the RTB register.</p>
+        </li>
+      </ol>
+      <div class="bands reveal" aria-label="Score bands">
+        <span class="band band-low"><b>0–24</b> Low</span>
+        <span class="band band-medium"><b>25–49</b> Medium</span>
+        <span class="band band-high"><b>50–100</b> High</span>
+      </div>
+    </section>
+
+    <section class="duo wrap" id="contact">
+      <div class="card reveal">
+        <h3>Ask a friend</h3>
+        <p class="card-sub">A second pair of eyes helps. Send them the ad before you pay anything.</p>
+        <form id="share-form" novalidate>
+          <textarea id="share-text" rows="3" placeholder="Paste the ad, or write what worries you" aria-label="Message to share"></textarea>
+          <div class="form-foot"><button type="submit" class="btn btn-quiet">Share</button></div>
+        </form>
+      </div>
+
+      <div class="card banded reveal">
+        <h3 class="band-head">Contact us</h3>
+        <form id="contact-form" novalidate>
+          <div class="field" data-rule="email">
+            <label for="contact-email" class="sr-only">Your email</label>
+            <input id="contact-email" type="email" autocomplete="email" placeholder="Your email *" required>
+            <p class="field-msg">Check the email address.</p>
+          </div>
+          <div class="field" data-rule="message">
+            <label for="contact-msg" class="sr-only">Your message</label>
+            <textarea id="contact-msg" rows="3" placeholder="Your message *" required></textarea>
+            <p class="field-msg">Write a few words.</p>
+          </div>
+          <div class="form-foot"><button type="submit" class="btn">Send</button></div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot wrap">
+    <p id="data-note"></p>
+    <p>rentCheck is a guide, not legal advice. Nothing you type is saved. Never pay before you've viewed a property in person.</p>
+    <p class="made">Built at Corkathon 2026</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
